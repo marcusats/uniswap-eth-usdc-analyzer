@@ -25,11 +25,9 @@ import { BigInt, log, BigDecimal, Bytes } from '@graphprotocol/graph-ts'
 
 
 
-
 function getPreviousSwapId(blockNumber: BigInt): string | null {
 
   let deploymentBlockNumber = BigInt.fromString("12370624");
-
  
   for (let currentBlock = blockNumber.minus(BigInt.fromI32(1)); currentBlock.ge(deploymentBlockNumber); currentBlock = currentBlock.minus(BigInt.fromI32(1))) {
     let lastSwapPerBlock = LastSwapPerBlock.load(currentBlock.toString());
