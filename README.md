@@ -48,7 +48,6 @@ To analyze user activity:
   userActivity(id: "0xUserAddress") {
     numberOfSwaps
     totalVolume
-    liquidityProvided
   }
 }
 ```
