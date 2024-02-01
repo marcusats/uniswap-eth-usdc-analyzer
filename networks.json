@@ -3,6 +3,16 @@
     "UniswapV3Pool": {
       "address": "0x8ad599c3a0ff1de082011efddc58f1908eb6e6d8",
       "startBlock": 12370624
+    },
+    "UniswapV3PoolTwo": {
+      "address": "0x88e6A0c2dDD26FEEb64F039a2c41296FcB3f5640",
+      "startBlock": 12376729
+    }
+  },
+  "polygon": {
+    "UniswapV3PoolPolygon" : {
+      "address": "0x19c5505638383337d2972ce68b493ad78e315147",
+      "startBlock": 49336023
     }
   }
 }
