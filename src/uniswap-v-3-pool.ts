@@ -1,178 +1,308 @@
 import {
-  Burn as BurnEvent,
+
+  Swap as SwapEvent,
   Collect as CollectEvent,
   CollectProtocol as CollectProtocolEvent,
   Flash as FlashEvent,
-  IncreaseObservationCardinalityNext as IncreaseObservationCardinalityNextEvent,
-  Initialize as InitializeEvent,
-  Mint as MintEvent,
-  SetFeeProtocol as SetFeeProtocolEvent,
-  Swap as SwapEvent
+  IncreaseObservationCardinalityNext as IncreaseObservationCardinalityNextEvent
 } from "../generated/UniswapV3Pool/UniswapV3Pool"
 import {
-  Burn,
-  Collect,
-  CollectProtocol,
-  Flash,
-  IncreaseObservationCardinalityNext,
-  Initialize,
-  Mint,
-  SetFeeProtocol,
-  Swap
+  Swap,
+  PriceImpact,
+  LastSwapPerBlock,
+  TradeSize,
+  FeeCollection,
+  FlashLoan,
+  MarketVolatility,
+  SwapAmount,
+  FlashLoanAmount,
+  ObservationCardinality,
+  DailyStat, 
+  UserActivity
 } from "../generated/schema"
 
-export function handleBurn(event: BurnEvent): void {
-  let entity = new Burn(
-    event.transaction.hash.concatI32(event.logIndex.toI32())
-  )
-  entity.owner = event.params.owner
-  entity.tickLower = event.params.tickLower
-  entity.tickUpper = event.params.tickUpper
-  entity.amount = event.params.amount
-  entity.amount0 = event.params.amount0
-  entity.amount1 = event.params.amount1
+import { BigInt, log, BigDecimal, Bytes } from '@graphprotocol/graph-ts'
 
-  entity.blockNumber = event.block.number
-  entity.blockTimestamp = event.block.timestamp
-  entity.transactionHash = event.transaction.hash
 
-  entity.save()
+
+
+function getPreviousSwapId(blockNumber: BigInt): string | null {
+
+  let deploymentBlockNumber = BigInt.fromString("12370624");
+
+ 
+  for (let currentBlock = blockNumber.minus(BigInt.fromI32(1)); currentBlock.ge(deploymentBlockNumber); currentBlock = currentBlock.minus(BigInt.fromI32(1))) {
+    let lastSwapPerBlock = LastSwapPerBlock.load(currentBlock.toString());
+
+    if (lastSwapPerBlock !== null) {
+      return lastSwapPerBlock.lastSwapId;
+    }
+  }
+
+  return null;
 }
 
-export function handleCollect(event: CollectEvent): void {
-  let entity = new Collect(
-    event.transaction.hash.concatI32(event.logIndex.toI32())
-  )
-  entity.owner = event.params.owner
-  entity.recipient = event.params.recipient
-  entity.tickLower = event.params.tickLower
-  entity.tickUpper = event.params.tickUpper
-  entity.amount0 = event.params.amount0
-  entity.amount1 = event.params.amount1
 
-  entity.blockNumber = event.block.number
-  entity.blockTimestamp = event.block.timestamp
-  entity.transactionHash = event.transaction.hash
+function convertSqrtPriceX96ToPrice(sqrtPriceX96: BigInt): BigDecimal {
+ 
+  let precision = BigDecimal.fromString('79228162514264337593543950336') // 2^96
 
-  entity.save()
+  let priceRatio = sqrtPriceX96.toBigDecimal().div(precision)
+
+  return priceRatio.times(priceRatio)
+}
+
+function calculatePriceImpact(priceBefore: BigDecimal, priceAfter: BigDecimal): BigDecimal {
+
+  if (priceBefore.equals(BigDecimal.zero())) {
+    return BigDecimal.zero()
+  }
+  let priceDifference = priceAfter.minus(priceBefore)
+  let priceImpact = priceDifference.div(priceBefore).times(BigDecimal.fromString('100'))
+
+  return priceImpact
+}
+
+
+function calculateVolatility(priceBefore: BigDecimal, priceAfter: BigDecimal): BigDecimal {
+
+
+  if (priceBefore.equals(BigDecimal.zero())) {
+    return BigDecimal.zero();
+  }
+
+  let priceChange = priceAfter.minus(priceBefore);
+
+
+  let volatility: BigDecimal;
+  if (priceChange < BigDecimal.zero()) {
+    volatility = priceChange.neg();
+  } else {
+    volatility = priceChange; 
+  }
+
+  volatility = volatility.div(priceBefore).times(BigDecimal.fromString('100'));
+
+  return volatility;
+}
+
+
+export function handleSwap(event: SwapEvent): void {
+  let swapId = event.transaction.hash.toHex().concat("-").concat(event.logIndex.toString());
+  let swap = Swap.load(swapId);
+  if (swap == null) {
+    swap = new Swap(swapId);
+    swap.sender = event.params.sender;
+    swap.recipient = event.params.recipient;
+    swap.amount0 = event.params.amount0;
+    swap.amount1 = event.params.amount1;
+    swap.sqrtPriceX96 = event.params.sqrtPriceX96;
+    swap.liquidity = event.params.liquidity;
+    swap.tick = event.params.tick;
+    swap.blockNumber = event.block.number;
+    swap.blockTimestamp = event.block.timestamp;
+    swap.transactionHash = event.transaction.hash;
+  }
+
+  
+  let previousSwapId = getPreviousSwapId(event.block.number);
+  let priceBefore = BigDecimal.fromString("0");
+  let priceAfter: BigDecimal;
+
+  if (previousSwapId) {
+    let previousSwap = Swap.load(previousSwapId);
+    if (previousSwap) {
+      priceBefore = convertSqrtPriceX96ToPrice(previousSwap.sqrtPriceX96);
+    }
+  } else {
+    priceBefore = BigDecimal.fromString("0"); 
+  }
+
+  priceAfter = convertSqrtPriceX96ToPrice(event.params.sqrtPriceX96);
+  let priceImpactValue = calculatePriceImpact(priceBefore, priceAfter);
+
+  let priceImpact = new PriceImpact(swapId);
+  priceImpact.swapEvent = swapId;
+  priceImpact.priceBefore = priceBefore;
+  priceImpact.priceAfter = priceAfter;
+  priceImpact.impact = priceImpactValue;
+  priceImpact.save();
+
+  swap.priceImpact = priceImpact.id;
+
+
+ 
+  let blockId = event.block.number.toString();
+  let lastSwapPerBlock = LastSwapPerBlock.load(blockId);
+  if (lastSwapPerBlock == null) {
+    lastSwapPerBlock = new LastSwapPerBlock(blockId);
+  }
+
+  lastSwapPerBlock.lastSwapId = swapId;
+  swap.lastSwapPerBlock = lastSwapPerBlock.id;
+  lastSwapPerBlock.save();
+
+
+  let tradeSize = TradeSize.load(swapId);
+  if (tradeSize == null) {
+    tradeSize = new TradeSize(swapId);
+    tradeSize.swap = swapId;  
+  }
+
+  tradeSize.sizeToken0 = absBigInt(event.params.amount0);
+  tradeSize.sizeToken1 = absBigInt(event.params.amount1);
+  tradeSize.save();
+
+  
+  let marketVolatilityId = event.block.number.toString();
+  let marketVolatility = MarketVolatility.load(marketVolatilityId);
+
+  if (marketVolatility == null) {
+    marketVolatility = new MarketVolatility(marketVolatilityId);
+    marketVolatility.totalVolatility = BigDecimal.zero();
+    marketVolatility.lastUpdated = event.block.number;
+  }
+
+  let volatility = calculateVolatility(priceBefore, priceAfter);
+  marketVolatility.totalVolatility = marketVolatility.totalVolatility.plus(volatility);
+  marketVolatility.lastUpdated = event.block.number;
+  marketVolatility.save();
+
+  let totalVolume = absBigInt(event.params.amount0).toBigDecimal().plus(absBigInt(event.params.amount1).toBigDecimal());
+
+
+  updateDailyStats(event.block.timestamp, totalVolume);
+
+  updateUserActivity(event.params.sender, totalVolume);
+
+  swap.save();
+
+  let swapAmountEntity = new SwapAmount(swapId);
+  swapAmountEntity.swap = swapId;
+  swapAmountEntity.amountSize = absBigInt(event.params.amount0).plus(absBigInt(event.params.amount1));
+  swapAmountEntity.save();
+}
+
+function updateUserActivity(userAddress: Bytes, swapVolume: BigDecimal): void {
+  let userId = userAddress.toHexString();
+  let userActivity = UserActivity.load(userId);
+
+  if (!userActivity) {
+    userActivity = new UserActivity(userId);
+    userActivity.numberOfSwaps = BigInt.fromI32(0);
+    userActivity.totalVolume = BigDecimal.zero();
+  }
+
+  userActivity.numberOfSwaps = userActivity.numberOfSwaps.plus(BigInt.fromI32(1));
+  userActivity.totalVolume = userActivity.totalVolume.plus(swapVolume);
+
+  userActivity.save();
 }
 
 export function handleCollectProtocol(event: CollectProtocolEvent): void {
-  let entity = new CollectProtocol(
-    event.transaction.hash.concatI32(event.logIndex.toI32())
-  )
-  entity.sender = event.params.sender
-  entity.recipient = event.params.recipient
-  entity.amount0 = event.params.amount0
-  entity.amount1 = event.params.amount1
+  let id = event.transaction.hash.toHex() + "-" + event.logIndex.toString()
+  let feeCollection = new FeeCollection(id)
 
-  entity.blockNumber = event.block.number
-  entity.blockTimestamp = event.block.timestamp
-  entity.transactionHash = event.transaction.hash
+  feeCollection.owner = event.params.sender
+  feeCollection.recipient = event.params.recipient
+  feeCollection.amount0 = event.params.amount0
+  feeCollection.amount1 = event.params.amount1
+  feeCollection.eventType = "CollectProtocol"
+  feeCollection.blockNumber = event.block.number
+  feeCollection.timestamp = event.block.timestamp
 
-  entity.save()
+  feeCollection.save()
+}
+
+export function handleCollect(event: CollectEvent): void {
+  let id = event.transaction.hash.toHex() + "-" + event.logIndex.toString()
+  let feeCollection = new FeeCollection(id)
+
+  feeCollection.owner = event.params.owner
+  feeCollection.recipient = event.params.recipient
+  feeCollection.amount0 = event.params.amount0
+  feeCollection.amount1 = event.params.amount1
+  feeCollection.eventType = "Collect"
+  feeCollection.blockNumber = event.block.number
+  feeCollection.timestamp = event.block.timestamp
+
+  feeCollection.save()
 }
 
 export function handleFlash(event: FlashEvent): void {
-  let entity = new Flash(
-    event.transaction.hash.concatI32(event.logIndex.toI32())
-  )
-  entity.sender = event.params.sender
-  entity.recipient = event.params.recipient
-  entity.amount0 = event.params.amount0
-  entity.amount1 = event.params.amount1
-  entity.paid0 = event.params.paid0
-  entity.paid1 = event.params.paid1
+  const flashLoanId = event.transaction.hash.toHex() + "-" + event.logIndex.toString();
+  let flashLoan = FlashLoan.load(flashLoanId);
 
-  entity.blockNumber = event.block.number
-  entity.blockTimestamp = event.block.timestamp
-  entity.transactionHash = event.transaction.hash
+  if (flashLoan === null) {
+    flashLoan = new FlashLoan(flashLoanId);
+    flashLoan.sender = event.params.sender;
+    flashLoan.recipient = event.params.recipient;
+    flashLoan.amount0 = event.params.amount0;
+    flashLoan.amount1 = event.params.amount1;
+    flashLoan.paid0 = event.params.paid0;
+    flashLoan.paid1 = event.params.paid1;
+    flashLoan.blockNumber = event.block.number;
+    flashLoan.timestamp = event.block.timestamp;
+    flashLoan.totalFlashLoanSize = absBigInt(event.params.amount0).plus(absBigInt(event.params.amount1));
+    flashLoan.numberOfLoans = BigInt.fromI32(1);
+  } else {
+    flashLoan.totalFlashLoanSize = flashLoan.totalFlashLoanSize.plus(absBigInt(event.params.amount0).plus(absBigInt(event.params.amount1)));
+    flashLoan.numberOfLoans = flashLoan.numberOfLoans.plus(BigInt.fromI32(1));
+  }
 
-  entity.save()
+  flashLoan.save();
+
+  let flashLoanAmountEntity = new FlashLoanAmount(flashLoanId);
+  flashLoanAmountEntity.flashLoan = flashLoanId;
+  flashLoanAmountEntity.amountSize = absBigInt(event.params.amount0).plus(absBigInt(event.params.amount1));
+  flashLoanAmountEntity.save();
+
 }
 
-export function handleIncreaseObservationCardinalityNext(
-  event: IncreaseObservationCardinalityNextEvent
-): void {
-  let entity = new IncreaseObservationCardinalityNext(
-    event.transaction.hash.concatI32(event.logIndex.toI32())
-  )
-  entity.observationCardinalityNextOld =
-    event.params.observationCardinalityNextOld
-  entity.observationCardinalityNextNew =
-    event.params.observationCardinalityNextNew
+export function handleIncreaseObservationCardinalityNext(event: IncreaseObservationCardinalityNextEvent): void {
+  let id = event.transaction.hash.toHex() + "-" + event.logIndex.toString();
+  let observationCardinality = new ObservationCardinality(id);
 
-  entity.blockNumber = event.block.number
-  entity.blockTimestamp = event.block.timestamp
-  entity.transactionHash = event.transaction.hash
+  observationCardinality.oldCardinality = event.params.observationCardinalityNextOld;
+  observationCardinality.newCardinality = event.params.observationCardinalityNextNew;
+  observationCardinality.timestamp = event.block.timestamp;
 
-  entity.save()
+  observationCardinality.save();
 }
 
-export function handleInitialize(event: InitializeEvent): void {
-  let entity = new Initialize(
-    event.transaction.hash.concatI32(event.logIndex.toI32())
-  )
-  entity.sqrtPriceX96 = event.params.sqrtPriceX96
-  entity.tick = event.params.tick
 
-  entity.blockNumber = event.block.number
-  entity.blockTimestamp = event.block.timestamp
-  entity.transactionHash = event.transaction.hash
 
-  entity.save()
+function updateDailyStats(timestamp: BigInt, swapVolume: BigDecimal): void {
+
+  let dateId = getDateId(timestamp);
+
+  let dailyStat = DailyStat.load(dateId);
+
+  if (!dailyStat) {
+    dailyStat = new DailyStat(dateId);
+    dailyStat.totalVolume = BigDecimal.zero();
+    dailyStat.totalTransactions = BigInt.zero();
+    dailyStat.timestamp = timestamp;
+
+  }
+
+  dailyStat.totalVolume = dailyStat.totalVolume.plus(swapVolume);
+  dailyStat.totalTransactions = dailyStat.totalTransactions.plus(BigInt.fromI32(1));
+
+  dailyStat.save();
 }
 
-export function handleMint(event: MintEvent): void {
-  let entity = new Mint(
-    event.transaction.hash.concatI32(event.logIndex.toI32())
-  )
-  entity.sender = event.params.sender
-  entity.owner = event.params.owner
-  entity.tickLower = event.params.tickLower
-  entity.tickUpper = event.params.tickUpper
-  entity.amount = event.params.amount
-  entity.amount0 = event.params.amount0
-  entity.amount1 = event.params.amount1
-
-  entity.blockNumber = event.block.number
-  entity.blockTimestamp = event.block.timestamp
-  entity.transactionHash = event.transaction.hash
-
-  entity.save()
+function getDateId(timestamp: BigInt): string {
+  let formatTime = timestamp.times(BigInt.fromI32(1000))
+  let timesst = formatTime.toI64()
+  let date = new Date(timesst);
+  return date.toISOString().split('T')[0];
 }
 
-export function handleSetFeeProtocol(event: SetFeeProtocolEvent): void {
-  let entity = new SetFeeProtocol(
-    event.transaction.hash.concatI32(event.logIndex.toI32())
-  )
-  entity.feeProtocol0Old = event.params.feeProtocol0Old
-  entity.feeProtocol1Old = event.params.feeProtocol1Old
-  entity.feeProtocol0New = event.params.feeProtocol0New
-  entity.feeProtocol1New = event.params.feeProtocol1New
-
-  entity.blockNumber = event.block.number
-  entity.blockTimestamp = event.block.timestamp
-  entity.transactionHash = event.transaction.hash
-
-  entity.save()
-}
-
-export function handleSwap(event: SwapEvent): void {
-  let entity = new Swap(
-    event.transaction.hash.concatI32(event.logIndex.toI32())
-  )
-  entity.sender = event.params.sender
-  entity.recipient = event.params.recipient
-  entity.amount0 = event.params.amount0
-  entity.amount1 = event.params.amount1
-  entity.sqrtPriceX96 = event.params.sqrtPriceX96
-  entity.liquidity = event.params.liquidity
-  entity.tick = event.params.tick
-
-  entity.blockNumber = event.block.number
-  entity.blockTimestamp = event.block.timestamp
-  entity.transactionHash = event.transaction.hash
-
-  entity.save()
+function absBigInt(value: BigInt): BigInt {
+  let zero = BigInt.fromI32(0);
+  if (value.lt(zero)) {
+    return value.times(BigInt.fromI32(-1));
+  }
+  return value;
 }
