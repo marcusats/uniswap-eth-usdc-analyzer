@@ -1,5 +1,4 @@
 import {
-
   Swap as SwapEvent,
   Collect as CollectEvent,
   CollectProtocol as CollectProtocolEvent,
@@ -18,7 +17,8 @@ import {
   FlashLoanAmount,
   ObservationCardinality,
   DailyStat, 
-  UserActivity
+  UserActivity,
+  RelayActivity
 } from "../generated/schema"
 
 import { BigInt, log, BigDecimal, Bytes } from '@graphprotocol/graph-ts'
@@ -171,7 +171,8 @@ export function handleSwap(event: SwapEvent): void {
 
   updateDailyStats(event.block.timestamp, totalVolume);
 
-  updateUserActivity(event.params.sender, totalVolume);
+  updateUserActivity(event.params.recipient, totalVolume);
+  updateRelayActivity(event.params.sender, totalVolume);
 
   swap.save();
 
@@ -195,6 +196,21 @@ function updateUserActivity(userAddress: Bytes, swapVolume: BigDecimal): void {
   userActivity.totalVolume = userActivity.totalVolume.plus(swapVolume);
 
   userActivity.save();
+}
+function updateRelayActivity(address: Bytes, swapVolume: BigDecimal): void {
+  let id = address.toHexString();
+  let relayActivity = RelayActivity.load(id);
+
+  if (!relayActivity) {
+    relayActivity = new RelayActivity(id);
+    relayActivity.numberOfSwaps = BigInt.fromI32(0);
+    relayActivity.totalVolume = BigDecimal.zero();
+  }
+
+  relayActivity.numberOfSwaps = relayActivity.numberOfSwaps.plus(BigInt.fromI32(1));
+  relayActivity.totalVolume = relayActivity.totalVolume.plus(swapVolume);
+
+  relayActivity.save();
 }
 
 export function handleCollectProtocol(event: CollectProtocolEvent): void {

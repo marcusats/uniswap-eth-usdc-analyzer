@@ -87,8 +87,6 @@ type ObservationCardinality @entity {
   timestamp: BigInt!
 }
 
-
-
 type DailyStat @entity {
   id: ID!  
   totalVolume: BigDecimal!
@@ -96,8 +94,13 @@ type DailyStat @entity {
   timestamp: BigInt!
 }
 
-
 type UserActivity @entity {
+  id: ID!                    
+  numberOfSwaps: BigInt!    
+  totalVolume: BigDecimal!   
+}
+
+type RelayActivity @entity {
   id: ID!                    
   numberOfSwaps: BigInt!    
   totalVolume: BigDecimal!   
